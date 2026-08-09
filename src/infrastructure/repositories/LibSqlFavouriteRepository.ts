@@ -1,4 +1,4 @@
-import type { Client } from '@libsql/client';
+import type { SqlExecutor } from '@/src/infrastructure/db/executor';
 import type { Product } from '@/src/domain/entities';
 import { ownerKey, type Owner } from '@/src/domain/owner';
 import type { Clock, FavouriteRepository } from '@/src/domain/ports';
@@ -6,7 +6,7 @@ import { toProduct } from '@/src/infrastructure/db/mappers';
 
 export class LibSqlFavouriteRepository implements FavouriteRepository {
   constructor(
-    private readonly db: Client,
+    private readonly db: SqlExecutor,
     private readonly clock: Clock,
   ) {}
 

@@ -2,7 +2,8 @@ import { orderTotal, type AccessToken, type Cart, type Category, type Order, typ
 import { AuthenticationError, ConflictError, NotFoundError, ValidationError } from '@/src/domain/errors';
 import type {
   AccessTokenRepository, CartRepository, CatalogueQueries, Clock, FavouriteRepository, IdGenerator,
-  OrderRepository, OwnershipTransfer, Page, PasswordHasher, ProductQuery, SessionRepository, UserRepository,
+  OrderRepository, OwnershipTransfer, Page, PasswordHasher, ProductQuery, SessionRepository,
+  UnitOfWork, UserRepository,
 } from '@/src/domain/ports';
 import { guestOwner, userOwner, type Owner } from '@/src/domain/owner';
 
@@ -106,9 +107,9 @@ export class ResolveOwner {
  * operation on two Owners rather than SQL hidden inside a repository.
  */
 export class TransferOwnership {
-  constructor(private readonly transfer: OwnershipTransfer) {}
+  constructor(private readonly unitOfWork: UnitOfWork) {}
   execute(from: Owner, to: Owner): Promise<void> {
-    return this.transfer.transferAll(from, to);
+    return this.unitOfWork.run(({ ownership }) => ownership.transferAll(from, to));
   }
 }
 
@@ -153,10 +154,8 @@ async function adoptGuestBelongings(
 
 export class RegisterUser {
   constructor(
-    private readonly users: UserRepository,
     private readonly passwords: PasswordHasher,
-    private readonly tokens: AccessTokenRepository,
-    private readonly transfer: OwnershipTransfer,
+    private readonly unitOfWork: UnitOfWork,
   ) {}
 
   async execute(input: {
@@ -168,18 +167,21 @@ export class RegisterUser {
     assertUsablePassword(input.password);
     const email = normaliseEmail(input.email);
 
-    if (await this.users.findByEmail(email)) {
-      throw new ConflictError(`An account already exists for ${email}.`);
-    }
+    // Hashed before the transaction opens, never inside it. scrypt takes
+    // ~100ms by design, and a write transaction holds a database-wide lock —
+    // hashing under it would put every other writer in the queue behind each
+    // sign-up.
+    const passwordHash = await this.passwords.hash(input.password);
 
-    const user = await this.users.create({
-      email,
-      displayName: input.displayName.trim(),
-      passwordHash: await this.passwords.hash(input.password),
+    return this.unitOfWork.run(async ({ users, accessTokens, ownership }) => {
+      if (await users.findByEmail(email)) {
+        throw new ConflictError(`An account already exists for ${email}.`);
+      }
+
+      const user = await users.create({ email, displayName: input.displayName.trim(), passwordHash });
+      await adoptGuestBelongings(ownership, input.guestSessionId ?? null, user);
+      return { user, token: await accessTokens.issue(user.id) };
     });
-
-    await adoptGuestBelongings(this.transfer, input.guestSessionId ?? null, user);
-    return { user, token: await this.tokens.issue(user.id) };
   }
 }
 
@@ -187,8 +189,7 @@ export class LogIn {
   constructor(
     private readonly users: UserRepository,
     private readonly passwords: PasswordHasher,
-    private readonly tokens: AccessTokenRepository,
-    private readonly transfer: OwnershipTransfer,
+    private readonly unitOfWork: UnitOfWork,
   ) {}
 
   /**
@@ -196,6 +197,11 @@ export class LogIn {
    * run the hash comparison. Returning "no such account" early would turn this
    * endpoint into a way to discover who has one, and answering faster for an
    * unknown address leaks the same fact through timing.
+   *
+   * The lookup and the verification happen before the transaction for the same
+   * reason as in `RegisterUser`: a failed sign-in should not have taken a write
+   * lock at all, and the successful path should hold one only for the two
+   * writes that must land together.
    */
   async execute(input: {
     email: string;
@@ -206,8 +212,10 @@ export class LogIn {
     const matches = await this.passwords.verify(input.password, found?.passwordHash ?? '');
     if (!found || !matches) throw new AuthenticationError('Email or password is incorrect.');
 
-    await adoptGuestBelongings(this.transfer, input.guestSessionId ?? null, found.user);
-    return { user: found.user, token: await this.tokens.issue(found.user.id) };
+    return this.unitOfWork.run(async ({ accessTokens, ownership }) => {
+      await adoptGuestBelongings(ownership, input.guestSessionId ?? null, found.user);
+      return { user: found.user, token: await accessTokens.issue(found.user.id) };
+    });
   }
 }
 
@@ -318,50 +326,59 @@ export class ToggleFavourite {
 
 export class PlaceOrder {
   constructor(
-    private readonly orders: OrderRepository,
-    private readonly carts: CartRepository,
+    private readonly unitOfWork: UnitOfWork,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
   ) {}
 
   /**
-   * Snapshots prices onto the order, writes it, then empties the cart.
+   * Reads the basket, snapshots prices onto an order, writes it, and empties
+   * the basket — all in one transaction.
    *
    * Emptying is part of placing rather than a separate call a route has to
-   * remember: an order that left the cart populated would let a customer buy
-   * the same basket twice.
+   * remember: an order that left the basket populated would let a customer buy
+   * it twice. That was still true when the two writes were merely adjacent,
+   * because a crash in between committed the order and kept the basket. Only a
+   * transaction actually makes it one event.
+   *
+   * The read belongs inside the same transaction as the writes. Two checkouts
+   * racing would otherwise both read a full basket and both produce an order
+   * for it; holding the write lock from the first read means the second sees
+   * the emptied basket and is rejected.
    */
-  async execute(owner: Owner): Promise<Order> {
-    const cart = await this.carts.get(owner);
-    if (cart.lines.length === 0) throw new ValidationError('Cannot place an order with an empty cart.');
+  execute(owner: Owner): Promise<Order> {
+    return this.unitOfWork.run(async ({ carts, orders }) => {
+      const cart = await carts.get(owner);
+      if (cart.lines.length === 0) throw new ValidationError('Cannot place an order with an empty cart.');
 
-    const outOfStock = cart.lines.filter((line) => !line.product.inStock);
-    if (outOfStock.length > 0) {
-      throw new ValidationError(
-        `These items are no longer in stock: ${outOfStock.map((l) => l.product.title).join(', ')}.`,
-      );
-    }
+      const outOfStock = cart.lines.filter((line) => !line.product.inStock);
+      if (outOfStock.length > 0) {
+        throw new ValidationError(
+          `These items are no longer in stock: ${outOfStock.map((l) => l.product.title).join(', ')}.`,
+        );
+      }
 
-    const lines = cart.lines.map((line) => ({
-      productId: line.product.id,
-      title: line.product.title,
-      unitPrice: line.product.price,
-      quantity: line.quantity,
-    }));
+      const lines = cart.lines.map((line) => ({
+        productId: line.product.id,
+        title: line.product.title,
+        unitPrice: line.product.price,
+        quantity: line.quantity,
+      }));
 
-    const now = this.clock.now();
-    const order: Order = {
-      id: this.ids.newId(),
-      reference: `ORD-${now.getFullYear()}-${this.ids.newId().slice(0, 6).toUpperCase()}`,
-      owner,
-      lines,
-      total: orderTotal(lines),
-      placedAt: now.toISOString(),
-    };
+      const now = this.clock.now();
+      const order: Order = {
+        id: this.ids.newId(),
+        reference: `ORD-${now.getFullYear()}-${this.ids.newId().slice(0, 6).toUpperCase()}`,
+        owner,
+        lines,
+        total: orderTotal(lines),
+        placedAt: now.toISOString(),
+      };
 
-    const created = await this.orders.create(order);
-    await this.carts.clear(owner);
-    return created;
+      const created = await orders.create(order);
+      await carts.clear(owner);
+      return created;
+    });
   }
 }
 

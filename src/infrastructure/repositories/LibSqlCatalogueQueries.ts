@@ -1,11 +1,11 @@
-import type { Client } from '@libsql/client';
+import type { SqlExecutor } from '@/src/infrastructure/db/executor';
 import type { Category, Product } from '@/src/domain/entities';
 import type { CatalogueQueries, Page, ProductQuery } from '@/src/domain/ports';
 import { toProduct } from '@/src/infrastructure/db/mappers';
 import { buildOrderBy, buildWhere } from '@/src/infrastructure/sql';
 
 export class LibSqlCatalogueQueries implements CatalogueQueries {
-  constructor(private readonly db: Client) {}
+  constructor(private readonly db: SqlExecutor) {}
 
   async find(query: ProductQuery): Promise<Page<Product>> {
     const where = buildWhere(query);

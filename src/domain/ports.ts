@@ -113,6 +113,39 @@ export interface AccessTokenRepository {
   revoke(token: string): Promise<void>;
 }
 
+/**
+ * The repositories available inside a unit of work, all bound to the same
+ * transaction.
+ *
+ * Only the mutating ports are here. The catalogue and sessions are read-only
+ * at the points that need atomicity, so including them would widen the
+ * interface for no one's benefit.
+ */
+export interface TransactionalRepositories {
+  readonly carts: CartRepository;
+  readonly orders: OrderRepository;
+  readonly users: UserRepository;
+  readonly accessTokens: AccessTokenRepository;
+  readonly ownership: OwnershipTransfer;
+}
+
+/**
+ * "These writes land together, or none of them do."
+ *
+ * The domain states the requirement; infrastructure knows what a transaction
+ * is. Checkout is the case that forces it: an order is written and then the
+ * basket is emptied, and a crash between the two leaves a shopper who has
+ * ordered and can order the same basket again.
+ *
+ * Note the shape. Passing repositories *into* the callback is what makes the
+ * guarantee real rather than advisory — a use case inside `run` can only reach
+ * the transactional repositories it is handed, so it cannot accidentally write
+ * through an ambient one that is not part of the transaction.
+ */
+export interface UnitOfWork {
+  run<T>(work: (repositories: TransactionalRepositories) => Promise<T>): Promise<T>;
+}
+
 export interface Clock { now(): Date }
 export interface IdGenerator { newId(): string }
 

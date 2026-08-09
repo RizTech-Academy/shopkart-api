@@ -21,9 +21,20 @@ export function movableClock(start: string = FIXED_NOW) {
   };
 }
 
-export const newContainer = (): Promise<Container> => newContainerWithClock({ now: () => new Date(FIXED_NOW) });
+export const newContainer = async (): Promise<Container> => (await newHarness()).container;
 
-export async function newContainerWithClock(clock: Clock): Promise<Container> {
+export const newContainerWithClock = async (clock: Clock): Promise<Container> =>
+  (await newHarness(clock)).container;
+
+/**
+ * The container plus the pieces underneath it.
+ *
+ * Most tests only want the use cases, but anything asserting on transactions
+ * needs the database and the same dependencies the container was wired with —
+ * building a second set would be testing a different object graph than the one
+ * that runs.
+ */
+export async function newHarness(clock: Clock = { now: () => new Date(FIXED_NOW) }) {
   const db = createClient({ url: ':memory:' });
   await migrateAndSeed(db);
 
@@ -32,7 +43,8 @@ export async function newContainerWithClock(clock: Clock): Promise<Container> {
   let tokenCounter = 0;
   const tokens: TokenGenerator = { newToken: () => `token-${String(++tokenCounter).padStart(4, '0')}` };
 
-  return buildContainer(db, { clock, ids, tokens, passwords: fakeHasher });
+  const deps = { clock, ids, tokens };
+  return { db, deps, container: buildContainer(db, { ...deps, passwords: fakeHasher }) };
 }
 
 /**

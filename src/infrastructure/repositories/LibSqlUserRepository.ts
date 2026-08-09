@@ -1,4 +1,5 @@
-import type { Client, Row } from '@libsql/client';
+import type { Row } from '@libsql/client';
+import type { SqlExecutor } from '@/src/infrastructure/db/executor';
 import type { User, UserCredentials } from '@/src/domain/entities';
 import { ConflictError } from '@/src/domain/errors';
 import type { Clock, IdGenerator, NewUser, UserRepository } from '@/src/domain/ports';
@@ -12,7 +13,7 @@ const toUser = (row: Row): User => ({
 
 export class LibSqlUserRepository implements UserRepository {
   constructor(
-    private readonly db: Client,
+    private readonly db: SqlExecutor,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
   ) {}

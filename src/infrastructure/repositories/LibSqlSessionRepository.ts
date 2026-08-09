@@ -1,10 +1,10 @@
-import type { Client } from '@libsql/client';
+import type { SqlExecutor } from '@/src/infrastructure/db/executor';
 import type { Session } from '@/src/domain/entities';
 import type { Clock, IdGenerator, SessionRepository } from '@/src/domain/ports';
 
 export class LibSqlSessionRepository implements SessionRepository {
   constructor(
-    private readonly db: Client,
+    private readonly db: SqlExecutor,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
   ) {}

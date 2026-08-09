@@ -1,4 +1,4 @@
-import type { Client } from '@libsql/client';
+import type { SqlExecutor } from '@/src/infrastructure/db/executor';
 import type { AccessToken } from '@/src/domain/entities';
 import type { AccessTokenRepository, Clock, TokenGenerator } from '@/src/domain/ports';
 
@@ -7,7 +7,7 @@ const LIFETIME_DAYS = 30;
 
 export class LibSqlAccessTokenRepository implements AccessTokenRepository {
   constructor(
-    private readonly db: Client,
+    private readonly db: SqlExecutor,
     private readonly tokens: TokenGenerator,
     private readonly clock: Clock,
   ) {}

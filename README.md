@@ -35,7 +35,7 @@ rm -rf data && npm run dev
 ### Other commands
 
 ```bash
-npm test           # 67 tests — unit + integration
+npm test           # 79 tests — unit + integration
 npm run typecheck  # tsc --noEmit, strict
 npm run build      # production build
 npm start          # run the production build
@@ -78,26 +78,38 @@ src/interface/http/  Request parsing, response DTOs, and the domain-error →
 app/api/…            Route handlers. Parse, delegate to a use case, format.
 ```
 
+**New to the codebase?** Follow one request through the layers — it is about 60 lines end to
+end:
+
+`app/api/cart/route.ts` → `application/useCases.ts` (`AddToCart`) →
+`domain/ports.ts` (`CartRepository`) → `infrastructure/repositories/LibSqlCartRepository.ts`
+
+The route parses and formats, the use case holds the rule, the port is the seam, and only the
+adapter knows SQL exists. Every other endpoint is the same four steps.
+
 Some consequences worth pointing at:
 
 **The domain does not know what a 404 is.** `GetProduct` throws `NotFoundError`. A single function in `interface/http/responses.ts` maps that to a status code. Which is why the same use cases could be driven from a CLI or a queue consumer without change.
 
 **Business rules cannot be bypassed by a route.** "Out of stock cannot be added to a cart" and "a quantity of zero means remove" live in use cases, not handlers. There is no code path around them.
 
-**Tests run against a real database, not mocks.** `__tests__/support.ts` builds the whole object graph against an in-memory SQLite with a fixed clock and deterministic ids. The 44 integration tests exercise genuine SQL — joins, constraints, `ON CONFLICT` upserts — in about 90 ms.
+**Tests run against a real database, not mocks.** `__tests__/support.ts` builds the whole object graph against an in-memory SQLite with a fixed clock and deterministic ids. The 56 integration tests exercise genuine SQL — joins, constraints, `ON CONFLICT` upserts — in about 90 ms.
 
 **Prices are integers.** `amountMinor: 12900` is $129.00. `Money` is a branded type, so a raw number cannot be passed where money is expected, and SQLite stores `INTEGER` — never `REAL`, which is a double.
 
 **Cart lines join to products rather than copying the price**, so a cart can never show a stale price that disagrees with checkout.
 
-**Entities are never serialised directly.** Every response body is built by a function in
-`interface/http/presenters.ts`. This is not ceremony, and the case that proves it is `Order`:
-it holds an `Owner`, and an `Owner` holds the session id — so returning the entity handed a
-shopper their own bearer credential back in the body of every order request. A DTO cannot make
-that mistake, because a field has to be written down to be sent. The same layer is why money
-has one shape everywhere: the catalogue used to send `price: { amountMinor, currency }` while
-the basket sent `unitPrice: 12900`, which makes an Android client model one concept twice and
-guess, per field, whether a bare integer means dollars or cents.
+**Checkout is one transaction.** Writing the order and emptying the basket must land together,
+or a shopper can pay twice. Repositories are handed an executor that can run a statement and
+nothing else, so none of them can open a transaction of its own — see
+[Transactions](#transactions).
+
+**Entities are never serialised directly.** Every response body is built in
+`interface/http/presenters.ts`, and `Order` shows why that is not ceremony: it holds an
+`Owner`, and an `Owner` holds the session id — so returning the entity handed a shopper their
+own credential back in the body of every order request. A DTO cannot make that mistake, because
+a field has to be written down to be sent. It is also why money has one shape everywhere rather
+than three, which an Android client would otherwise have to model three times.
 
 ### Owner, and the mistake it corrects
 
@@ -156,6 +168,55 @@ later does not lock out every account created before the change.
 **The UNIQUE constraint is the real duplicate-email check**, not the lookup that precedes it.
 Two simultaneous sign-ups both pass that lookup; only one survives the insert, and translating
 the constraint failure in the repository turns the race into a clean 409 rather than a 500.
+
+### Transactions
+
+**The problem.** Checkout does three things: read the basket, write the order, empty the
+basket. As three separate statements there are two ways to charge someone twice — a crash after
+the order is written leaves the basket full, and two checkouts arriving together both read the
+same full basket.
+
+**The fix, in two pieces.**
+
+`UnitOfWork` is a port in the domain. It says one thing: *run this work so that every write
+inside it lands, or none does.*
+
+```ts
+interface UnitOfWork {
+  run<T>(work: (repositories: TransactionalRepositories) => Promise<T>): Promise<T>;
+}
+```
+
+It hands the repositories *to* the callback rather than letting it reach for them. That is what
+makes the guarantee real instead of advisory: code inside `run` can only touch repositories
+that are part of the transaction.
+
+`SqlExecutor` is the other half. Repositories used to receive libSQL's `Client`, which can open
+transactions. They now receive this:
+
+```ts
+interface SqlExecutor {
+  execute(statement: InStatement): Promise<ResultSet>;
+}
+```
+
+Where a transaction begins and ends is a decision about a use case, not about one table — so a
+repository is given nothing it could use to make that decision. `PlaceOrder` reads like the
+business rule it is, and the SQL underneath cannot escape it.
+
+**Three things libSQL taught us**, each a comment in `infrastructure/db/LibSqlUnitOfWork.ts` if
+you want the detail:
+
+| Decision | Why |
+| --- | --- |
+| Issue `BEGIN`/`COMMIT` directly instead of `client.transaction()` | That method swaps the connection for a fresh one. `PRAGMA foreign_keys` is per-connection, so constraints would stop being enforced — and a `:memory:` database *is* its connection, so tests would lose their tables. |
+| Key the write queue on the connection, not on the object | One connection means one writer. Holding the queue in a field breaks silently if two units of work ever share a client — which a composition root that memoised after an `await` quietly caused. |
+| Track re-entrancy with `AsyncLocalStorage` | A boolean cannot tell "called from inside another transaction" apart from "a second request arrived mid-await". Guessing wrong puts one shopper's checkout inside another's transaction. |
+
+One honest note on `BEGIN IMMEDIATE`: it is easy to credit it with more than it does. Inside
+this process the *queue* is what stops two checkouts reading the same basket — switching to
+`DEFERRED` breaks no test. `IMMEDIATE` covers what the queue cannot see, such as a second
+process on the same file.
 
 ---
 
@@ -254,24 +315,34 @@ There is no payment step — deliberately out of scope.
 ```
 23 unit         Money arithmetic, SQL fragment building, LIKE escaping, injection
                 safety, scrypt hashing, response DTOs, and spec/route drift
-44 integration  Real SQLite: catalogue queries, basket lifecycle, checkout, owner
-                isolation, accounts, tokens, and guest-to-account transfer
+56 integration  Real SQLite: catalogue queries, basket lifecycle, checkout, owner
+                isolation, accounts, tokens, transactions, and guest-to-account
+                transfer
 ```
 
-The integration tests cover the cases that actually break in production: adding the same
-product twice increments rather than duplicating, a quantity of zero removes, checkout
-empties the basket so it cannot be bought twice, one shopper cannot read another's orders,
-and a guest basket survives being transferred to an account — summing quantities where both
-sides held the same product, rather than silently dropping one.
+They aim at the cases that actually break in production rather than at coverage:
 
-The account tests pin the security-relevant behaviour rather than just the happy path: a wrong
-password and an unknown address fail with the identical message, an expired token stops
-resolving, signing out of one device leaves another signed in, and case or padding in an email
-cannot produce a second account.
+- **Basket** — adding the same product twice increments rather than duplicating, a quantity of
+  zero removes, and checkout empties the basket so it cannot be bought twice.
+- **Ownership** — one shopper cannot read another's orders, and a guest basket transferred to
+  an account sums quantities where both sides held the same product instead of dropping one.
+- **Accounts** — a wrong password and an unknown address fail with the identical message, an
+  expired token stops resolving, signing out of one device leaves another signed in, and case
+  or padding in an email cannot create a second account.
+- **Transactions** — a failed unit of work leaves nothing behind, two simultaneous checkouts
+  produce exactly one order, and foreign keys are still enforced after a transaction has run.
 
-Password hashing is faked everywhere except `unit.password.test.ts`, which exercises the real
-scrypt adapter. A KDF is slow on purpose; running it in every account test would buy no
-coverage and dominate the suite's runtime.
+Two notes on how they are written:
+
+**Fakes only where a real thing would cost something.** Password hashing is faked everywhere
+except `unit.password.test.ts`, which exercises the genuine scrypt adapter. A KDF is slow by
+design; running it in every account test would dominate the suite and buy no coverage.
+Everything else — including the database — is real.
+
+**A test that cannot fail is not a test.** Each transaction guarantee was checked by breaking
+the implementation and confirming the right tests went red. That is how the `BEGIN IMMEDIATE`
+note above came about: switching to `DEFERRED` broke nothing, so the comment claiming it
+prevented double checkout was wrong and got corrected.
 
 ---
 
