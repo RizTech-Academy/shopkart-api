@@ -1,6 +1,7 @@
 import type { Row } from '@libsql/client';
 import { money } from '@/src/domain/money';
 import type { Order, OrderLine, Product } from '@/src/domain/entities';
+import type { Owner } from '@/src/domain/owner';
 
 /** Row → entity. The only place database column names are known. */
 export function toProduct(row: Row): Product {
@@ -25,11 +26,11 @@ export function toOrderLine(row: Row): OrderLine {
   };
 }
 
-export function toOrder(row: Row, lines: readonly OrderLine[]): Order {
+export function toOrder(row: Row, owner: Owner, lines: readonly OrderLine[]): Order {
   return {
     id: String(row.id),
     reference: String(row.reference),
-    sessionId: String(row.session_id),
+    owner,
     lines,
     total: money(Number(row.total_minor)),
     placedAt: String(row.placed_at),

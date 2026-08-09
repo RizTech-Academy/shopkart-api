@@ -10,16 +10,16 @@ type Ctx = { params: Promise<{ productId: string }> };
 export const PATCH = (request: Request, ctx: Ctx) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
     const { quantity } = await parseBody(request, updateQuantitySchema);
     const { productId } = await ctx.params;
-    return ok(toCartView(await c.updateCartQuantity.execute(session.id, productId, quantity)));
+    return ok(toCartView(await c.updateCartQuantity.execute(owner, productId, quantity)));
   });
 
 export const DELETE = (request: Request, ctx: Ctx) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
     const { productId } = await ctx.params;
-    return ok(toCartView(await c.removeFromCart.execute(session.id, productId)));
+    return ok(toCartView(await c.removeFromCart.execute(owner, productId)));
   });

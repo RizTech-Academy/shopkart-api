@@ -1,9 +1,10 @@
 import { cartSubtotal, orderTotal, type Cart, type Category, type Order, type Product, type Session } from '@/src/domain/entities';
 import { NotFoundError, ValidationError } from '@/src/domain/errors';
 import type {
-  CartRepository, Clock, FavouriteRepository, IdGenerator, OrderRepository,
-  Page, ProductQuery, ProductRepository, SessionRepository,
+  CartRepository, CatalogueQueries, Clock, FavouriteRepository, IdGenerator, OrderRepository,
+  OwnershipTransfer, Page, ProductQuery, SessionRepository,
 } from '@/src/domain/ports';
+import { guestOwner, type Owner } from '@/src/domain/owner';
 
 /**
  * Application layer.
@@ -17,25 +18,25 @@ import type {
 // ---------- catalogue ----------
 
 export class ListProducts {
-  constructor(private readonly products: ProductRepository) {}
+  constructor(private readonly catalogue: CatalogueQueries) {}
   execute(query: ProductQuery): Promise<Page<Product>> {
-    return this.products.find(query);
+    return this.catalogue.find(query);
   }
 }
 
 export class GetProduct {
-  constructor(private readonly products: ProductRepository) {}
+  constructor(private readonly catalogue: CatalogueQueries) {}
   async execute(id: string): Promise<Product> {
-    const product = await this.products.findById(id);
+    const product = await this.catalogue.findById(id);
     if (!product) throw new NotFoundError('product', id);
     return product;
   }
 }
 
 export class ListCategories {
-  constructor(private readonly products: ProductRepository) {}
+  constructor(private readonly catalogue: CatalogueQueries) {}
   execute(): Promise<readonly Category[]> {
-    return this.products.listCategories();
+    return this.catalogue.listCategories();
   }
 }
 
@@ -49,17 +50,35 @@ export class CreateSession {
 }
 
 /**
- * Every cart, favourite and order operation runs through this first.
- * Centralising it means no endpoint can forget to check, and an unknown
- * session can never silently create orphaned rows.
+ * Turns whatever the transport supplied into the domain's Owner.
+ *
+ * The single place a session id becomes ownership, which is what keeps every
+ * other use case ignorant of how a shopper was identified. When accounts
+ * arrive this gains a token branch and nothing downstream changes.
  */
-export class RequireSession {
+export class ResolveOwner {
   constructor(private readonly sessions: SessionRepository) {}
-  async execute(sessionId: string | null): Promise<Session> {
-    if (!sessionId) throw new ValidationError('A session id is required. Create one with POST /api/sessions.');
+
+  async execute(sessionId: string | null): Promise<Owner> {
+    if (!sessionId) {
+      throw new ValidationError('A session id is required. Create one with POST /api/sessions.');
+    }
     const session = await this.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('session', sessionId);
-    return session;
+    return guestOwner(session.id);
+  }
+}
+
+/**
+ * Moves everything one shopper owns onto another.
+ *
+ * Exists so "sign in and keep the basket you built as a guest" is a domain
+ * operation on two Owners rather than SQL hidden inside a repository.
+ */
+export class TransferOwnership {
+  constructor(private readonly transfer: OwnershipTransfer) {}
+  execute(from: Owner, to: Owner): Promise<void> {
+    return this.transfer.transferAll(from, to);
   }
 }
 
@@ -88,57 +107,57 @@ export const toCartView = (cart: Cart): CartView => ({
 
 export class GetCart {
   constructor(private readonly carts: CartRepository) {}
-  execute(sessionId: string): Promise<Cart> {
-    return this.carts.get(sessionId);
+  execute(owner: Owner): Promise<Cart> {
+    return this.carts.get(owner);
   }
 }
 
 export class AddToCart {
   constructor(
     private readonly carts: CartRepository,
-    private readonly products: ProductRepository,
+    private readonly catalogue: CatalogueQueries,
   ) {}
 
   /** Out-of-stock is rejected here so no route can bypass the rule. */
-  async execute(sessionId: string, productId: string, quantity: number): Promise<Cart> {
+  async execute(owner: Owner, productId: string, quantity: number): Promise<Cart> {
     if (!Number.isInteger(quantity) || quantity < 1) {
       throw new ValidationError(`Quantity must be a positive integer, got ${quantity}.`);
     }
-    const product = await this.products.findById(productId);
+    const product = await this.catalogue.findById(productId);
     if (!product) throw new NotFoundError('product', productId);
     if (!product.inStock) throw new ValidationError(`"${product.title}" is out of stock.`);
 
-    await this.carts.addItem(sessionId, productId, quantity);
-    return this.carts.get(sessionId);
+    await this.carts.addItem(owner, productId, quantity);
+    return this.carts.get(owner);
   }
 }
 
 export class UpdateCartQuantity {
   constructor(private readonly carts: CartRepository) {}
   /** Zero means remove — encoded once so every caller behaves identically. */
-  async execute(sessionId: string, productId: string, quantity: number): Promise<Cart> {
+  async execute(owner: Owner, productId: string, quantity: number): Promise<Cart> {
     if (!Number.isInteger(quantity) || quantity < 0) {
       throw new ValidationError(`Quantity must be a non-negative integer, got ${quantity}.`);
     }
-    if (quantity === 0) await this.carts.removeItem(sessionId, productId);
-    else await this.carts.setQuantity(sessionId, productId, quantity);
-    return this.carts.get(sessionId);
+    if (quantity === 0) await this.carts.removeItem(owner, productId);
+    else await this.carts.setQuantity(owner, productId, quantity);
+    return this.carts.get(owner);
   }
 }
 
 export class RemoveFromCart {
   constructor(private readonly carts: CartRepository) {}
-  async execute(sessionId: string, productId: string): Promise<Cart> {
-    await this.carts.removeItem(sessionId, productId);
-    return this.carts.get(sessionId);
+  async execute(owner: Owner, productId: string): Promise<Cart> {
+    await this.carts.removeItem(owner, productId);
+    return this.carts.get(owner);
   }
 }
 
 export class ClearCart {
   constructor(private readonly carts: CartRepository) {}
-  async execute(sessionId: string): Promise<Cart> {
-    await this.carts.clear(sessionId);
-    return this.carts.get(sessionId);
+  async execute(owner: Owner): Promise<Cart> {
+    await this.carts.clear(owner);
+    return this.carts.get(owner);
   }
 }
 
@@ -146,19 +165,19 @@ export class ClearCart {
 
 export class ListFavourites {
   constructor(private readonly favourites: FavouriteRepository) {}
-  execute(sessionId: string): Promise<readonly Product[]> {
-    return this.favourites.list(sessionId);
+  execute(owner: Owner): Promise<readonly Product[]> {
+    return this.favourites.list(owner);
   }
 }
 
 export class ToggleFavourite {
   constructor(
     private readonly favourites: FavouriteRepository,
-    private readonly products: ProductRepository,
+    private readonly catalogue: CatalogueQueries,
   ) {}
-  async execute(sessionId: string, productId: string): Promise<{ favourited: boolean }> {
-    if (!(await this.products.findById(productId))) throw new NotFoundError('product', productId);
-    return this.favourites.toggle(sessionId, productId);
+  async execute(owner: Owner, productId: string): Promise<{ favourited: boolean }> {
+    if (!(await this.catalogue.findById(productId))) throw new NotFoundError('product', productId);
+    return this.favourites.toggle(owner, productId);
   }
 }
 
@@ -179,8 +198,8 @@ export class PlaceOrder {
    * remember: an order that left the cart populated would let a customer buy
    * the same basket twice.
    */
-  async execute(sessionId: string): Promise<Order> {
-    const cart = await this.carts.get(sessionId);
+  async execute(owner: Owner): Promise<Order> {
+    const cart = await this.carts.get(owner);
     if (cart.lines.length === 0) throw new ValidationError('Cannot place an order with an empty cart.');
 
     const outOfStock = cart.lines.filter((line) => !line.product.inStock);
@@ -201,29 +220,29 @@ export class PlaceOrder {
     const order: Order = {
       id: this.ids.newId(),
       reference: `ORD-${now.getFullYear()}-${this.ids.newId().slice(0, 6).toUpperCase()}`,
-      sessionId,
+      owner,
       lines,
       total: orderTotal(lines),
       placedAt: now.toISOString(),
     };
 
     const created = await this.orders.create(order);
-    await this.carts.clear(sessionId);
+    await this.carts.clear(owner);
     return created;
   }
 }
 
 export class ListOrders {
   constructor(private readonly orders: OrderRepository) {}
-  execute(sessionId: string): Promise<readonly Order[]> {
-    return this.orders.listBySession(sessionId);
+  execute(owner: Owner): Promise<readonly Order[]> {
+    return this.orders.listFor(owner);
   }
 }
 
 export class GetOrder {
   constructor(private readonly orders: OrderRepository) {}
-  async execute(sessionId: string, orderId: string): Promise<Order> {
-    const order = await this.orders.findById(sessionId, orderId);
+  async execute(owner: Owner, orderId: string): Promise<Order> {
+    const order = await this.orders.findFor(owner, orderId);
     if (!order) throw new NotFoundError('order', orderId);
     return order;
   }

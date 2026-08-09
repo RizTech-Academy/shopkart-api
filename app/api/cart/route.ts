@@ -8,21 +8,21 @@ export const dynamic = 'force-dynamic';
 export const GET = (request: Request) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
-    return ok(toCartView(await c.getCart.execute(session.id)));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
+    return ok(toCartView(await c.getCart.execute(owner)));
   });
 
 export const POST = (request: Request) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
     const body = await parseBody(request, addToCartSchema);
-    return ok(toCartView(await c.addToCart.execute(session.id, body.productId, body.quantity)));
+    return ok(toCartView(await c.addToCart.execute(owner, body.productId, body.quantity)));
   });
 
 export const DELETE = (request: Request) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
-    return ok(toCartView(await c.clearCart.execute(session.id)));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
+    return ok(toCartView(await c.clearCart.execute(owner)));
   });

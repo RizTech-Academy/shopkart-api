@@ -1,4 +1,5 @@
 import { addMinor, money, multiplyMinor, type Money, ZERO } from '@/src/domain/money';
+import type { Owner } from '@/src/domain/owner';
 
 export interface Rating {
   readonly average: number;
@@ -28,7 +29,7 @@ export interface CartLine {
 }
 
 export interface Cart {
-  readonly sessionId: string;
+  readonly owner: Owner;
   readonly lines: readonly CartLine[];
 }
 
@@ -43,7 +44,7 @@ export interface OrderLine {
 export interface Order {
   readonly id: string;
   readonly reference: string;
-  readonly sessionId: string;
+  readonly owner: Owner;
   readonly lines: readonly OrderLine[];
   readonly total: Money;
   readonly placedAt: string;

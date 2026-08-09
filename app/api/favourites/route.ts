@@ -7,14 +7,14 @@ export const dynamic = 'force-dynamic';
 export const GET = (request: Request) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
-    return ok(await c.listFavourites.execute(session.id));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
+    return ok(await c.listFavourites.execute(owner));
   });
 
 export const POST = (request: Request) =>
   handle(async () => {
     const c = await getContainer();
-    const session = await c.requireSession.execute(sessionIdOf(request));
+    const owner = await c.resolveOwner.execute(sessionIdOf(request));
     const { productId } = await parseBody(request, toggleFavouriteSchema);
-    return ok(await c.toggleFavourite.execute(session.id, productId));
+    return ok(await c.toggleFavourite.execute(owner, productId));
   });

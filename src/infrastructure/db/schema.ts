@@ -27,29 +27,29 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
    )`,
 
   `CREATE TABLE IF NOT EXISTS cart_items (
-     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     owner_key  TEXT NOT NULL,
      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
      quantity   INTEGER NOT NULL CHECK (quantity > 0),
      added_at   TEXT NOT NULL,
-     PRIMARY KEY (session_id, product_id)
+     PRIMARY KEY (owner_key, product_id)
    )`,
 
   `CREATE TABLE IF NOT EXISTS favourites (
-     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     owner_key  TEXT NOT NULL,
      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
      added_at   TEXT NOT NULL,
-     PRIMARY KEY (session_id, product_id)
+     PRIMARY KEY (owner_key, product_id)
    )`,
 
   `CREATE TABLE IF NOT EXISTS orders (
      id          TEXT PRIMARY KEY,
      reference   TEXT NOT NULL UNIQUE,
-     session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     owner_key   TEXT NOT NULL,
      total_minor INTEGER NOT NULL CHECK (total_minor >= 0),
      currency    TEXT NOT NULL DEFAULT 'USD',
      placed_at   TEXT NOT NULL
    )`,
-  `CREATE INDEX IF NOT EXISTS idx_orders_session ON orders (session_id, placed_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_orders_owner ON orders (owner_key, placed_at DESC)`,
 
   `CREATE TABLE IF NOT EXISTS order_lines (
      order_id        TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,

@@ -1,5 +1,6 @@
 import type { Client } from '@libsql/client';
 import type { Order } from '@/src/domain/entities';
+import { ownerKey, type Owner } from '@/src/domain/owner';
 import type { OrderRepository } from '@/src/domain/ports';
 import { toOrder, toOrderLine } from '@/src/infrastructure/db/mappers';
 
@@ -11,9 +12,9 @@ export class LibSqlOrderRepository implements OrderRepository {
     await this.db.batch(
       [
         {
-          sql: `INSERT INTO orders (id, reference, session_id, total_minor, currency, placed_at)
+          sql: `INSERT INTO orders (id, reference, owner_key, total_minor, currency, placed_at)
                 VALUES (?, ?, ?, ?, 'USD', ?)`,
-          args: [order.id, order.reference, order.sessionId, order.total.amountMinor, order.placedAt],
+          args: [order.id, order.reference, ownerKey(order.owner), order.total.amountMinor, order.placedAt],
         },
         ...order.lines.map((line) => ({
           sql: `INSERT INTO order_lines (order_id, product_id, title, unit_price_minor, quantity)
@@ -26,21 +27,21 @@ export class LibSqlOrderRepository implements OrderRepository {
     return order;
   }
 
-  async listBySession(sessionId: string): Promise<readonly Order[]> {
+  async listFor(owner: Owner): Promise<readonly Order[]> {
     const { rows } = await this.db.execute({
-      sql: 'SELECT * FROM orders WHERE session_id = ? ORDER BY placed_at DESC',
-      args: [sessionId],
+      sql: 'SELECT * FROM orders WHERE owner_key = ? ORDER BY placed_at DESC',
+      args: [ownerKey(owner)],
     });
-    return Promise.all(rows.map(async (row) => toOrder(row, await this.linesFor(String(row.id)))));
+    return Promise.all(rows.map(async (r) => toOrder(r, owner, await this.linesFor(String(r.id)))));
   }
 
-  async findById(sessionId: string, orderId: string): Promise<Order | null> {
+  async findFor(owner: Owner, orderId: string): Promise<Order | null> {
     const { rows } = await this.db.execute({
-      sql: 'SELECT * FROM orders WHERE id = ? AND session_id = ?',
-      args: [orderId, sessionId],
+      sql: 'SELECT * FROM orders WHERE id = ? AND owner_key = ?',
+      args: [orderId, ownerKey(owner)],
     });
     const row = rows[0];
-    return row ? toOrder(row, await this.linesFor(String(row.id))) : null;
+    return row ? toOrder(row, owner, await this.linesFor(String(row.id))) : null;
   }
 
   private async linesFor(orderId: string) {

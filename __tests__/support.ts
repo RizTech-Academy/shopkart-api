@@ -19,6 +19,8 @@ export async function newContainer(): Promise<Container> {
   return buildContainer(db, clock, ids);
 }
 
-export async function newSessionId(c: Container): Promise<string> {
-  return (await c.createSession.execute()).id;
+/** A guest owner backed by a real session row. */
+export async function newGuest(c: Container) {
+  const session = await c.createSession.execute();
+  return c.resolveOwner.execute(session.id);
 }

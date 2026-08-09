@@ -17,7 +17,14 @@ npm install
 npm run dev
 ```
 
-That's it. Open <http://localhost:3000> for the endpoint list.
+That's it.
+
+- <http://localhost:3000/docs> — **Swagger UI**, for trying every endpoint in the browser
+- <http://localhost:3000/api/openapi.json> — the raw spec, importable into Postman or Insomnia
+
+**Using Swagger UI:** call `POST /api/sessions` first, copy the returned `id`, click
+**Authorize** at the top right and paste it. Every basket, favourite and order endpoint
+needs that header.
 
 On first run the database is created at `data/shopkart.db` and seeded with 23 products. It persists across restarts. To start clean, delete the file:
 
@@ -28,7 +35,7 @@ rm -rf data && npm run dev
 ### Other commands
 
 ```bash
-npm test           # 30 tests — unit + integration
+npm test           # 35 tests — unit + integration
 npm run typecheck  # tsc --noEmit, strict
 npm run build      # production build
 npm start          # run the production build
@@ -71,6 +78,28 @@ Some consequences worth pointing at:
 **Prices are integers.** `amountMinor: 12900` is $129.00. `Money` is a branded type, so a raw number cannot be passed where money is expected, and SQLite stores `INTEGER` — never `REAL`, which is a double.
 
 **Cart lines join to products rather than copying the price**, so a cart can never show a stale price that disagrees with checkout.
+
+### Owner, and the mistake it corrects
+
+An earlier version of this codebase keyed baskets and orders on a **session id**. That is
+wrong, and instructively so. A session is an authentication artifact — it expires, it is
+per-device, it is a detail of *how* somebody proved who they are. A basket belongs to a
+**shopper**, and a shopper is either a guest or a registered user.
+
+`src/domain/owner.ts` models that as a sealed type. Three things follow:
+
+- the domain never learns that sessions or tokens exist
+- "keep the basket I built as a guest when I sign in" is an operation on two `Owner`s,
+  not SQL smuggled into a session repository
+- the compiler forces every call site to say which kind it holds
+
+`ResolveOwner` is the single place a session id becomes ownership. When accounts arrive it
+gains a token branch and nothing downstream changes.
+
+`OwnershipTransfer` is a one-method interface for the same reason. Moving a basket spans
+three tables and belongs to none of them — putting it on `CartRepository` would force every
+implementor to know about favourites and orders, which is exactly the interface-segregation
+problem worth avoiding.
 
 ---
 
@@ -134,10 +163,15 @@ There is no payment step — deliberately out of scope.
 
 ```
 9  unit         Money arithmetic, SQL fragment building, LIKE escaping, injection safety
-21 integration  Real SQLite: catalogue queries, cart lifecycle, checkout, session isolation
+26 integration  Real SQLite: catalogue queries, basket lifecycle, checkout,
+                owner isolation, and guest-to-account transfer
 ```
 
-The integration tests cover the cases that actually break in production: adding the same product twice increments rather than duplicating, a quantity of zero removes, checkout empties the cart so a basket cannot be bought twice, and one session cannot read another's orders.
+The integration tests cover the cases that actually break in production: adding the same
+product twice increments rather than duplicating, a quantity of zero removes, checkout
+empties the basket so it cannot be bought twice, one shopper cannot read another's orders,
+and a guest basket survives being transferred to an account — summing quantities where both
+sides held the same product, rather than silently dropping one.
 
 ---
 
