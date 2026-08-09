@@ -1,10 +1,10 @@
-import { cartSubtotal, orderTotal, type Cart, type Category, type Order, type Product, type Session } from '@/src/domain/entities';
-import { NotFoundError, ValidationError } from '@/src/domain/errors';
+import { orderTotal, type AccessToken, type Cart, type Category, type Order, type Product, type Session, type User } from '@/src/domain/entities';
+import { AuthenticationError, ConflictError, NotFoundError, ValidationError } from '@/src/domain/errors';
 import type {
-  CartRepository, CatalogueQueries, Clock, FavouriteRepository, IdGenerator, OrderRepository,
-  OwnershipTransfer, Page, ProductQuery, SessionRepository,
+  AccessTokenRepository, CartRepository, CatalogueQueries, Clock, FavouriteRepository, IdGenerator,
+  OrderRepository, OwnershipTransfer, Page, PasswordHasher, ProductQuery, SessionRepository, UserRepository,
 } from '@/src/domain/ports';
-import { guestOwner, type Owner } from '@/src/domain/owner';
+import { guestOwner, userOwner, type Owner } from '@/src/domain/owner';
 
 /**
  * Application layer.
@@ -50,22 +50,52 @@ export class CreateSession {
 }
 
 /**
+ * Whatever the transport managed to collect about who is calling.
+ *
+ * Deliberately not a `Request`: the application layer must not learn what a
+ * header is. The HTTP layer extracts these two strings; a CLI or a test
+ * supplies them directly.
+ */
+export interface PresentedCredentials {
+  readonly bearerToken: string | null;
+  readonly sessionId: string | null;
+}
+
+/**
  * Turns whatever the transport supplied into the domain's Owner.
  *
- * The single place a session id becomes ownership, which is what keeps every
- * other use case ignorant of how a shopper was identified. When accounts
- * arrive this gains a token branch and nothing downstream changes.
+ * The single place a credential becomes ownership, which is what keeps every
+ * other use case ignorant of how a shopper was identified. This is the token
+ * branch the Owner type was designed for — note that adding it changed nothing
+ * downstream: not one cart, favourite or order use case knows accounts now
+ * exist.
+ *
+ * A token beats a session when both are sent. That ordering is a rule, not an
+ * accident: a signed-in shopper on a shared device must see their own basket,
+ * never the one the device was carrying.
  */
 export class ResolveOwner {
-  constructor(private readonly sessions: SessionRepository) {}
+  constructor(
+    private readonly sessions: SessionRepository,
+    private readonly tokens: AccessTokenRepository,
+  ) {}
 
-  async execute(sessionId: string | null): Promise<Owner> {
-    if (!sessionId) {
-      throw new ValidationError('A session id is required. Create one with POST /api/sessions.');
+  async execute(credentials: PresentedCredentials): Promise<Owner> {
+    if (credentials.bearerToken) {
+      const userId = await this.tokens.findUserId(credentials.bearerToken);
+      if (!userId) throw new AuthenticationError('That access token is invalid or has expired. Sign in again.');
+      return userOwner(userId);
     }
-    const session = await this.sessions.findById(sessionId);
-    if (!session) throw new NotFoundError('session', sessionId);
-    return guestOwner(session.id);
+
+    if (credentials.sessionId) {
+      const session = await this.sessions.findById(credentials.sessionId);
+      if (!session) throw new NotFoundError('session', credentials.sessionId);
+      return guestOwner(session.id);
+    }
+
+    throw new AuthenticationError(
+      'A session id or access token is required. Create a session with POST /api/sessions, or sign in at POST /api/auth/login.',
+    );
   }
 }
 
@@ -82,28 +112,131 @@ export class TransferOwnership {
   }
 }
 
-// ---------- cart ----------
+// ---------- accounts ----------
 
-export interface CartView {
-  readonly lines: readonly { productId: string; title: string; imageUrl: string; unitPrice: number; quantity: number; lineTotal: number }[];
-  readonly itemCount: number;
-  readonly subtotalMinor: number;
-  readonly currency: 'USD';
+export interface Authenticated {
+  readonly user: User;
+  readonly token: AccessToken;
 }
 
-export const toCartView = (cart: Cart): CartView => ({
-  lines: cart.lines.map((line) => ({
-    productId: line.product.id,
-    title: line.product.title,
-    imageUrl: line.product.imageUrl,
-    unitPrice: line.product.price.amountMinor,
-    quantity: line.quantity,
-    lineTotal: line.product.price.amountMinor * line.quantity,
-  })),
-  itemCount: cart.lines.reduce((n, l) => n + l.quantity, 0),
-  subtotalMinor: cartSubtotal(cart).amountMinor,
-  currency: 'USD',
-});
+/** Short enough to type, long enough to be worth hashing. */
+export const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Enforced here rather than in the request schema so the rule holds for every
+ * caller. A zod schema can only guarantee the shape of one endpoint's body.
+ */
+function assertUsablePassword(password: string): void {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new ValidationError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+}
+
+/** Addresses are compared case-insensitively, so one canonical form is stored. */
+const normaliseEmail = (email: string): string => email.trim().toLowerCase();
+
+/**
+ * Carries the basket a shopper built before they had an account.
+ *
+ * Signing up or in with items already in a guest basket must not lose them.
+ * Expressed as a transfer between two Owners — the mechanism the Owner type
+ * was introduced for — rather than as SQL that knows about sessions.
+ */
+async function adoptGuestBelongings(
+  transfer: OwnershipTransfer,
+  guestSessionId: string | null,
+  user: User,
+): Promise<void> {
+  if (!guestSessionId) return;
+  await transfer.transferAll(guestOwner(guestSessionId), userOwner(user.id));
+}
+
+export class RegisterUser {
+  constructor(
+    private readonly users: UserRepository,
+    private readonly passwords: PasswordHasher,
+    private readonly tokens: AccessTokenRepository,
+    private readonly transfer: OwnershipTransfer,
+  ) {}
+
+  async execute(input: {
+    email: string;
+    password: string;
+    displayName: string;
+    guestSessionId?: string | null;
+  }): Promise<Authenticated> {
+    assertUsablePassword(input.password);
+    const email = normaliseEmail(input.email);
+
+    if (await this.users.findByEmail(email)) {
+      throw new ConflictError(`An account already exists for ${email}.`);
+    }
+
+    const user = await this.users.create({
+      email,
+      displayName: input.displayName.trim(),
+      passwordHash: await this.passwords.hash(input.password),
+    });
+
+    await adoptGuestBelongings(this.transfer, input.guestSessionId ?? null, user);
+    return { user, token: await this.tokens.issue(user.id) };
+  }
+}
+
+export class LogIn {
+  constructor(
+    private readonly users: UserRepository,
+    private readonly passwords: PasswordHasher,
+    private readonly tokens: AccessTokenRepository,
+    private readonly transfer: OwnershipTransfer,
+  ) {}
+
+  /**
+   * An unknown address and a wrong password fail identically, and both still
+   * run the hash comparison. Returning "no such account" early would turn this
+   * endpoint into a way to discover who has one, and answering faster for an
+   * unknown address leaks the same fact through timing.
+   */
+  async execute(input: {
+    email: string;
+    password: string;
+    guestSessionId?: string | null;
+  }): Promise<Authenticated> {
+    const found = await this.users.findByEmail(normaliseEmail(input.email));
+    const matches = await this.passwords.verify(input.password, found?.passwordHash ?? '');
+    if (!found || !matches) throw new AuthenticationError('Email or password is incorrect.');
+
+    await adoptGuestBelongings(this.transfer, input.guestSessionId ?? null, found.user);
+    return { user: found.user, token: await this.tokens.issue(found.user.id) };
+  }
+}
+
+export class LogOut {
+  constructor(private readonly tokens: AccessTokenRepository) {}
+  /** Idempotent: revoking an already-revoked token is a success, not an error. */
+  execute(token: string): Promise<void> {
+    return this.tokens.revoke(token);
+  }
+}
+
+export class GetCurrentUser {
+  constructor(private readonly users: UserRepository) {}
+
+  /**
+   * Takes an Owner, so it states in its signature that a guest has no profile
+   * to return — rather than accepting a user id a caller had to dig out first.
+   */
+  async execute(owner: Owner): Promise<User> {
+    if (owner.kind !== 'user') {
+      throw new AuthenticationError('You are browsing as a guest. Sign in to see your account.');
+    }
+    const user = await this.users.findById(owner.userId);
+    if (!user) throw new NotFoundError('user', owner.userId);
+    return user;
+  }
+}
+
+// ---------- cart ----------
 
 export class GetCart {
   constructor(private readonly carts: CartRepository) {}

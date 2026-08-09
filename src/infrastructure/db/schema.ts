@@ -26,6 +26,27 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
      created_at TEXT NOT NULL
    )`,
 
+  // COLLATE NOCASE on the column, not just on lookups: the UNIQUE index
+  // inherits the column's collation, so "Ada@x.com" and "ada@x.com" cannot
+  // both be registered. Enforcing that only in application code would leave
+  // two concurrent sign-ups free to create both.
+  `CREATE TABLE IF NOT EXISTS users (
+     id            TEXT PRIMARY KEY,
+     email         TEXT NOT NULL COLLATE NOCASE UNIQUE,
+     display_name  TEXT NOT NULL,
+     password_hash TEXT NOT NULL,
+     created_at    TEXT NOT NULL
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS access_tokens (
+     token      TEXT PRIMARY KEY,
+     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     created_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   )`,
+  // Deleting an account revokes its tokens by cascade; this makes that cheap.
+  `CREATE INDEX IF NOT EXISTS idx_access_tokens_user ON access_tokens (user_id)`,
+
   `CREATE TABLE IF NOT EXISTS cart_items (
      owner_key  TEXT NOT NULL,
      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,

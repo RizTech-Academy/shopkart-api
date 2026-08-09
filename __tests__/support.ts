@@ -1,26 +1,59 @@
 import { createClient } from '@libsql/client';
 import { migrateAndSeed } from '@/src/infrastructure/db/client';
 import { buildContainer, type Container } from '@/src/infrastructure/container';
-import type { Clock, IdGenerator } from '@/src/domain/ports';
+import type { Clock, IdGenerator, PasswordHasher, TokenGenerator } from '@/src/domain/ports';
 
 /**
  * Each test gets its own migrated in-memory database and a deterministic
- * clock and id generator, so assertions on ids and timestamps are stable and
- * tests cannot leak state into one another.
+ * clock, id generator and token generator, so assertions on ids and timestamps
+ * are stable and tests cannot leak state into one another.
  */
-export async function newContainer(): Promise<Container> {
+export const FIXED_NOW = '2026-01-15T10:00:00.000Z';
+
+/** A clock a test can wind forward, for anything that expires. */
+export function movableClock(start: string = FIXED_NOW) {
+  let current = new Date(start);
+  return {
+    now: () => current,
+    advanceDays: (days: number) => {
+      current = new Date(current.getTime() + days * 24 * 60 * 60 * 1000);
+    },
+  };
+}
+
+export const newContainer = (): Promise<Container> => newContainerWithClock({ now: () => new Date(FIXED_NOW) });
+
+export async function newContainerWithClock(clock: Clock): Promise<Container> {
   const db = createClient({ url: ':memory:' });
   await migrateAndSeed(db);
 
-  const clock: Clock = { now: () => new Date('2026-01-15T10:00:00.000Z') };
   let counter = 0;
   const ids: IdGenerator = { newId: () => `id-${String(++counter).padStart(4, '0')}` };
+  let tokenCounter = 0;
+  const tokens: TokenGenerator = { newToken: () => `token-${String(++tokenCounter).padStart(4, '0')}` };
 
-  return buildContainer(db, clock, ids);
+  return buildContainer(db, { clock, ids, tokens, passwords: fakeHasher });
 }
+
+/**
+ * scrypt is deliberately slow — that is the entire point of it — and a real
+ * one here would dominate the suite's runtime for no coverage gained. The
+ * genuine adapter is tested directly in `unit.password.test.ts`; everything
+ * else only needs "the same password verifies, a different one does not".
+ */
+export const fakeHasher: PasswordHasher = {
+  hash: async (plaintext) => `fake:${plaintext}`,
+  verify: async (plaintext, hash) => hash === `fake:${plaintext}`,
+};
 
 /** A guest owner backed by a real session row. */
 export async function newGuest(c: Container) {
   const session = await c.createSession.execute();
-  return c.resolveOwner.execute(session.id);
+  return c.resolveOwner.execute({ sessionId: session.id, bearerToken: null });
+}
+
+/** A registered shopper, plus the token that authenticates them. */
+export async function newUser(c: Container, email = 'ada@example.com', password = 'correct-horse') {
+  const { user, token } = await c.registerUser.execute({ email, password, displayName: 'Ada' });
+  return { user, token, owner: await c.resolveOwner.execute({ sessionId: null, bearerToken: token.value }) };
 }
