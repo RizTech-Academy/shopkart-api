@@ -35,7 +35,7 @@ rm -rf data && npm run dev
 ### Other commands
 
 ```bash
-npm test           # 79 tests — unit + integration
+npm test           # 105 tests — unit + integration
 npm run typecheck  # tsc --noEmit, strict
 npm run build      # production build
 npm start          # run the production build
@@ -93,7 +93,7 @@ Some consequences worth pointing at:
 
 **Business rules cannot be bypassed by a route.** "Out of stock cannot be added to a cart" and "a quantity of zero means remove" live in use cases, not handlers. There is no code path around them.
 
-**Tests run against a real database, not mocks.** `__tests__/support.ts` builds the whole object graph against an in-memory SQLite with a fixed clock and deterministic ids. The 56 integration tests exercise genuine SQL — joins, constraints, `ON CONFLICT` upserts — in about 90 ms.
+**Tests run against a real database, not mocks.** `__tests__/support.ts` builds the whole object graph against an in-memory SQLite with a fixed clock and deterministic ids. The 80 integration and HTTP tests exercise genuine SQL — joins, constraints, `ON CONFLICT` upserts — in about 90 ms.
 
 **Prices are integers.** `amountMinor: 12900` is $129.00. `Money` is a branded type, so a raw number cannot be passed where money is expected, and SQLite stores `INTEGER` — never `REAL`, which is a double.
 
@@ -131,6 +131,10 @@ per-device, it is a detail of *how* somebody proved who they are. A basket belon
 three tables and belongs to none of them — putting it on `CartRepository` would force every
 implementor to know about favourites and orders, which is exactly the interface-segregation
 problem worth avoiding.
+
+It has no endpoint, and that is the point. `RegisterUser` and `LogIn` reach it when a guest
+session id arrives with the request; "move everything this shopper owns onto that one" is not
+something a client should be able to ask for directly.
 
 ### Accounts, and what the Owner type bought
 
@@ -315,9 +319,11 @@ There is no payment step — deliberately out of scope.
 ```
 23 unit         Money arithmetic, SQL fragment building, LIKE escaping, injection
                 safety, scrypt hashing, response DTOs, and spec/route drift
-56 integration  Real SQLite: catalogue queries, basket lifecycle, checkout, owner
+58 integration  Real SQLite: catalogue queries, basket lifecycle, checkout, owner
                 isolation, accounts, tokens, transactions, and guest-to-account
                 transfer
+24 http         The route handlers themselves, called directly: header parsing,
+                status codes, and response envelopes
 ```
 
 They aim at the cases that actually break in production rather than at coverage:
@@ -331,6 +337,10 @@ They aim at the cases that actually break in production rather than at coverage:
   or padding in an email cannot create a second account.
 - **Transactions** — a failed unit of work leaves nothing behind, two simultaneous checkouts
   produce exactly one order, and foreign keys are still enforced after a transaction has run.
+- **HTTP** — `NotFoundError` really does become a 404, a 401 carries `WWW-Authenticate`, an
+  order response never contains the session id, and a bearer token beats a session header.
+  Route handlers are plain functions over `Request`, so these call them directly; only
+  `getContainer` is swapped, leaving the presenters, error mapping and database real.
 
 Two notes on how they are written:
 

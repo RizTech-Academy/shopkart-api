@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { movableClock, newContainer, newContainerWithClock, newGuest } from './support';
+import type { Client } from '@libsql/client';
+import { movableClock, newContainer, newContainerWithClock, newGuest, newHarness } from './support';
 import type { Container } from '@/src/infrastructure/container';
 import { ownerKey, type Owner } from '@/src/domain/owner';
+
+const tokenCount = async (db: Client) =>
+  Number((await db.execute('SELECT COUNT(*) AS n FROM access_tokens')).rows[0]?.n ?? 0);
 
 describe('accounts (integration)', () => {
   let c: Container;
@@ -71,6 +75,40 @@ describe('accounts (integration)', () => {
     const { token } = await register();
     await c.logOut.execute(token.value);
     await expect(c.logOut.execute(token.value)).resolves.toBeUndefined();
+  });
+
+  it("clears out a user's expired tokens when issuing a new one", async () => {
+    const clock = movableClock();
+    const { db, container } = await newHarness(clock);
+    const credentials = { email: 'ada@example.com', password: 'correct-horse' };
+
+    await container.registerUser.execute({ ...credentials, displayName: 'Ada' });
+    await container.logIn.execute(credentials);
+    expect(await tokenCount(db)).toBe(2);
+
+    clock.advanceDays(31);
+    const fresh = await container.logIn.execute(credentials);
+
+    // Both earlier tokens are long dead. They were already ignored when
+    // resolving an owner, but rows nobody will read again should not pile up.
+    expect(await tokenCount(db)).toBe(1);
+    await expect(
+      container.resolveOwner.execute({ bearerToken: fresh.token.value, sessionId: null }),
+    ).resolves.toBeDefined();
+  });
+
+  it("leaves another user's tokens alone when purging", async () => {
+    const clock = movableClock();
+    const { db, container } = await newHarness(clock);
+
+    await container.registerUser.execute({ email: 'ada@example.com', password: 'correct-horse', displayName: 'Ada' });
+    await container.registerUser.execute({ email: 'bob@example.com', password: 'correct-horse', displayName: 'Bob' });
+
+    clock.advanceDays(31);
+    await container.logIn.execute({ email: 'ada@example.com', password: 'correct-horse' });
+
+    // Ada's expired token goes; Bob's expired token is not Ada's to remove.
+    expect(await tokenCount(db)).toBe(2);
   });
 
   it('rejects an unknown token', async () => {

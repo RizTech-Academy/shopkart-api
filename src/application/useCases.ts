@@ -100,19 +100,6 @@ export class ResolveOwner {
   }
 }
 
-/**
- * Moves everything one shopper owns onto another.
- *
- * Exists so "sign in and keep the basket you built as a guest" is a domain
- * operation on two Owners rather than SQL hidden inside a repository.
- */
-export class TransferOwnership {
-  constructor(private readonly unitOfWork: UnitOfWork) {}
-  execute(from: Owner, to: Owner): Promise<void> {
-    return this.unitOfWork.run(({ ownership }) => ownership.transferAll(from, to));
-  }
-}
-
 // ---------- accounts ----------
 
 export interface Authenticated {

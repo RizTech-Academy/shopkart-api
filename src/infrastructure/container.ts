@@ -55,7 +55,6 @@ export function buildContainer(db: Client, options: ContainerOptions = {}) {
     listCategories: new uc.ListCategories(catalogue),
     createSession: new uc.CreateSession(sessions),
     resolveOwner: new uc.ResolveOwner(sessions, accessTokens),
-    transferOwnership: new uc.TransferOwnership(unitOfWork),
     registerUser: new uc.RegisterUser(passwords, unitOfWork),
     logIn: new uc.LogIn(users, passwords, unitOfWork),
     logOut: new uc.LogOut(accessTokens),
