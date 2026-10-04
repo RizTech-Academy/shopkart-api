@@ -3,7 +3,17 @@ export interface SeedProduct {
   priceMinor: number; imageUrl: string; ratingAverage: number; ratingCount: number; inStock: boolean;
 }
 
-const img = (seed: string) => `https://picsum.photos/seed/${seed}/800/800`;
+/**
+ * Artwork is served by this API, not a stock-photo host.
+ *
+ * Absolute, because mobile clients hand the URL straight to an image loader.
+ * SHOPKART_PUBLIC_URL is how the API is reached from *outside* the machine it
+ * runs on - the Android emulator sees the host as 10.0.2.2, not localhost - and
+ * an empty default leaves the path relative, which is what a browser wants.
+ */
+const PUBLIC_BASE = process.env.SHOPKART_PUBLIC_URL ?? '';
+
+const img = (id: string) => `${PUBLIC_BASE}/api/products/${id}/image`;
 
 const p = (
   id: string, title: string, category: string, priceMinor: number,
