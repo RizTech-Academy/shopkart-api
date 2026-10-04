@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Types first: a type error is the cheapest failure to diagnose, and
+      # running it before the tests keeps a compile problem from being reported
+      # as a mysterious test failure.
+      - name: Types
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      # The build is its own check. Tests exercise the route handlers directly;
+      # only a build proves the app actually compiles and every route is
+      # statically analysable.
+      - name: Build
+        run: npm run build
