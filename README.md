@@ -178,3 +178,36 @@ sides held the same product, rather than silently dropping one.
 ## Configuration
 
 None required. `DATABASE_URL` is honoured if set — `:memory:` for an ephemeral database, or a libSQL URL for a hosted one — but the default local file needs no configuration at all.
+
+## Product photos
+
+Each product's photo ships with the API in `public/products/<id>.webp` (800×800), so the
+catalogue looks the same offline, in CI and in five years, with nothing hotlinked from a stock
+host. They are free photos from [Pexels](https://www.pexels.com/license/), cropped and resized
+for the demo; the products themselves are fictional.
+
+| Product | Photo |
+| --- | --- |
+| Aurora Wireless Headphones | [Pexels](https://www.pexels.com/photo/210927/) |
+| Pulse Bluetooth Speaker | [Pexels](https://www.pexels.com/photo/9842750/) |
+| Echo Studio Microphone | [Pexels](https://www.pexels.com/photo/12715624/) |
+| Nomad Earbuds Pro | [Pexels](https://www.pexels.com/photo/32880383/) |
+| Meridian Mechanical Keyboard | [Pexels](https://www.pexels.com/photo/12561283/) |
+| Glide Ergonomic Mouse | [Pexels](https://www.pexels.com/photo/20510003/) |
+| Vista 27-inch 4K Monitor | [Pexels](https://www.pexels.com/photo/27559482/) |
+| Anchor USB-C Hub | [Pexels](https://www.pexels.com/photo/20076003/) |
+| Trail 30L Backpack | [Pexels](https://www.pexels.com/photo/5202030/) |
+| Summit Insulated Bottle | [Pexels](https://www.pexels.com/photo/7815021/) |
+| Beacon Camp Lantern | [Pexels](https://www.pexels.com/photo/7385016/) |
+| Loom Merino Sweater | [Pexels](https://www.pexels.com/photo/13889763/) |
+| Drift Canvas Jacket | [Pexels](https://www.pexels.com/photo/11442987/) |
+| Everyday Cotton Tee | [Pexels](https://www.pexels.com/photo/12025472/) |
+| Range Wool Socks | [Pexels](https://www.pexels.com/photo/14267095/) |
+| Brew Pour-Over Set | [Pexels](https://www.pexels.com/photo/8211266/) |
+| Grind Burr Coffee Mill | [Pexels](https://www.pexels.com/photo/13427986/) |
+| Slate Chef Knife 8-inch | [Pexels](https://www.pexels.com/photo/4226864/) |
+| Ember Cast Iron Skillet | [Pexels](https://www.pexels.com/photo/8743943/) |
+| Focus Desk Lamp | [Pexels](https://www.pexels.com/photo/28461166/) |
+| Quiet Mist Humidifier | [Pexels](https://www.pexels.com/photo/7417506/) |
+| Terra Ceramic Planter | [Pexels](https://www.pexels.com/photo/18294113/) |
+| Linen Throw Blanket | [Pexels](https://www.pexels.com/photo/31658575/) |
