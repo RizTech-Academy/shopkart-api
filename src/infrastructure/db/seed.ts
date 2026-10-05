@@ -4,7 +4,9 @@ export interface SeedProduct {
 }
 
 /**
- * Artwork is served by this API, not a stock-photo host.
+ * Product photos ship with this API (public/products), not a stock-photo host:
+ * a hotlinked image breaks or changes the day the host moves it, and the
+ * catalogue should look the same offline as on day one.
  *
  * Absolute, because mobile clients hand the URL straight to an image loader.
  * SHOPKART_PUBLIC_URL is how the API is reached from *outside* the machine it
@@ -13,7 +15,7 @@ export interface SeedProduct {
  */
 const PUBLIC_BASE = process.env.SHOPKART_PUBLIC_URL ?? '';
 
-const img = (id: string) => `${PUBLIC_BASE}/api/products/${id}/image`;
+const img = (id: string) => `${PUBLIC_BASE}/products/${id}.webp`;
 
 const p = (
   id: string, title: string, category: string, priceMinor: number,
@@ -42,7 +44,7 @@ export const SEED_PRODUCTS: readonly SeedProduct[] = [
   p('p-042', 'Slate Chef Knife 8-inch',    'kitchen', 8900, 4.9, 178, true, 'High-carbon stainless chef knife, full tang, hand-finished 15-degree edge.'),
   p('p-043', 'Ember Cast Iron Skillet',    'kitchen', 6400, 4.7, 823, true, 'Pre-seasoned 10-inch cast iron skillet. Oven safe and effectively permanent.'),
   p('p-050', 'Focus Desk Lamp',            'home', 7400,  4.3, 143, true,  'Adjustable LED desk lamp with five colour temperatures and a flicker-free driver.'),
-  p('p-051', 'Quiet Air Purifier',         'home', 19900, 4.5, 297, true,  'True HEPA purifier rated for 40 square metres, running at 24 dB on low.'),
+  p('p-051', 'Quiet Mist Humidifier',      'home', 5900,  4.5, 297, true,  'Ultrasonic cool-mist humidifier with a 3-litre tank, quiet enough to run overnight.'),
   p('p-052', 'Terra Ceramic Planter',      'home', 3200,  4.2, 61,  true,  'Stoneware planter with a drainage hole and matching saucer.'),
   p('p-053', 'Linen Throw Blanket',        'home', 8400,  4.6, 132, false, 'Stonewashed European linen throw that softens with every wash.'),
 ];
