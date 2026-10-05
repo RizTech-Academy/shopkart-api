@@ -55,6 +55,33 @@ export interface Session {
   readonly createdAt: string;
 }
 
+/**
+ * A registered shopper.
+ *
+ * Note what is absent: no password, no hash, no token. Those are how somebody
+ * proves they are this user, not part of what a user *is* — and keeping them
+ * out means a User can be passed to any layer without a credential leaking
+ * with it.
+ */
+export interface User {
+  readonly id: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly createdAt: string;
+}
+
+/** A user together with the secret used to authenticate them. Storage-facing only. */
+export interface UserCredentials {
+  readonly user: User;
+  readonly passwordHash: string;
+}
+
+export interface AccessToken {
+  readonly value: string;
+  readonly userId: string;
+  readonly expiresAt: string;
+}
+
 // ---- derived values, owned by the domain so every caller agrees ----
 
 export const lineTotal = (line: CartLine): Money => ({

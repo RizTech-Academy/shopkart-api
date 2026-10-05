@@ -1,4 +1,4 @@
-import type { Cart, Category, Order, Product, Session } from '@/src/domain/entities';
+import type { AccessToken, Cart, Category, Order, Product, Session, User, UserCredentials } from '@/src/domain/entities';
 import type { Owner } from '@/src/domain/owner';
 
 /**
@@ -71,5 +71,87 @@ export interface SessionRepository {
   findById(id: string): Promise<Session | null>;
 }
 
+export interface NewUser {
+  readonly email: string;
+  readonly displayName: string;
+  readonly passwordHash: string;
+}
+
+export interface UserRepository {
+  create(user: NewUser): Promise<User>;
+  findById(id: string): Promise<User | null>;
+  /** Returns the hash alongside the user: verifying a password needs both. */
+  findByEmail(email: string): Promise<UserCredentials | null>;
+}
+
+/**
+ * Turns a password into something safe to store, and checks one against it.
+ *
+ * A port rather than a direct call to `node:crypto` for the reason the whole
+ * layer exists: the domain states *that* passwords are hashed and verified,
+ * and infrastructure decides with what. Swapping scrypt for argon2 — or for a
+ * fast fake in tests, where a real KDF would dominate the runtime — touches
+ * one adapter.
+ */
+export interface PasswordHasher {
+  hash(plaintext: string): Promise<string>;
+  verify(plaintext: string, hash: string): Promise<boolean>;
+}
+
+/**
+ * Issues and redeems bearer tokens.
+ *
+ * Tokens are opaque and stored, not signed. A signed token cannot be revoked
+ * without keeping a denylist — which is the same table, arrived at by a longer
+ * route — and this API has no need to validate a token without touching the
+ * database. Logging out therefore actually invalidates the token.
+ */
+export interface AccessTokenRepository {
+  issue(userId: string): Promise<AccessToken>;
+  /** Null when unknown *or* expired: a caller must not have to check the clock. */
+  findUserId(token: string): Promise<string | null>;
+  revoke(token: string): Promise<void>;
+}
+
+/**
+ * The repositories available inside a unit of work, all bound to the same
+ * transaction.
+ *
+ * Only the mutating ports are here. The catalogue and sessions are read-only
+ * at the points that need atomicity, so including them would widen the
+ * interface for no one's benefit.
+ */
+export interface TransactionalRepositories {
+  readonly carts: CartRepository;
+  readonly orders: OrderRepository;
+  readonly users: UserRepository;
+  readonly accessTokens: AccessTokenRepository;
+  readonly ownership: OwnershipTransfer;
+}
+
+/**
+ * "These writes land together, or none of them do."
+ *
+ * The domain states the requirement; infrastructure knows what a transaction
+ * is. Checkout is the case that forces it: an order is written and then the
+ * basket is emptied, and a crash between the two leaves a shopper who has
+ * ordered and can order the same basket again.
+ *
+ * Note the shape. Passing repositories *into* the callback is what makes the
+ * guarantee real rather than advisory — a use case inside `run` can only reach
+ * the transactional repositories it is handed, so it cannot accidentally write
+ * through an ambient one that is not part of the transaction.
+ */
+export interface UnitOfWork {
+  run<T>(work: (repositories: TransactionalRepositories) => Promise<T>): Promise<T>;
+}
+
 export interface Clock { now(): Date }
 export interface IdGenerator { newId(): string }
+
+/**
+ * Separate from IdGenerator because the requirements differ: an id needs to be
+ * unique, a token needs to be unguessable. Conflating them is how a UUID ends
+ * up being used as a credential.
+ */
+export interface TokenGenerator { newToken(): string }

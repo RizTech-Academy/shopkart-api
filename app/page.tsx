@@ -4,7 +4,13 @@ const groups = [
     ['GET', '/api/products/:id', 'single product'],
     ['GET', '/api/categories', 'categories with counts'],
   ]},
-  { title: 'Session', rows: [['POST', '/api/sessions', 'create an anonymous session']] },
+  { title: 'Session', rows: [['POST', '/api/sessions', 'create an anonymous guest session']] },
+  { title: 'Accounts', rows: [
+    ['POST', '/api/auth/register', '{ email, password, displayName }'],
+    ['POST', '/api/auth/login', '{ email, password }'],
+    ['POST', '/api/auth/logout', 'revokes this device’s token'],
+    ['GET', '/api/auth/me', 'the signed-in shopper'],
+  ]},
   { title: 'Cart', rows: [
     ['GET', '/api/cart', 'current cart'],
     ['POST', '/api/cart', '{ productId, quantity }'],
@@ -28,8 +34,10 @@ export default function Home() {
     <main style={{ maxWidth: 820, margin: '0 auto', padding: '3rem 1.25rem' }}>
       <h1 style={{ fontSize: '1.9rem', margin: 0 }}>ShopKart API</h1>
       <p style={{ color: '#9a9aae' }}>
-        Catalogue, cart, favourites and orders for the ShopKart Android sample app. All write
-        endpoints require an <code>x-session-id</code> header from <code>POST /api/sessions</code>.
+        Catalogue, cart, favourites and orders for the ShopKart Android sample app. Basket,
+        favourite and order endpoints take either an <code>x-session-id</code> header from{' '}
+        <code>POST /api/sessions</code> or an <code>Authorization: Bearer</code> token from{' '}
+        <code>/api/auth/login</code>. Signing in carries the guest basket across.
       </p>
       {groups.map((g) => (
         <section key={g.title} style={{ marginTop: '2rem' }}>

@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { newContainer, newGuest } from './support';
+import type { Client } from '@libsql/client';
+import { newGuest, newHarness } from './support';
 import type { Container } from '@/src/infrastructure/container';
-import { userOwner } from '@/src/domain/owner';
+import { LibSqlUnitOfWork } from '@/src/infrastructure/db/LibSqlUnitOfWork';
+import type { RepositoryDependencies } from '@/src/infrastructure/repositories/factory';
+import { userOwner, type Owner } from '@/src/domain/owner';
 import { cartSubtotal } from '@/src/domain/entities';
 
 /**
@@ -9,19 +12,32 @@ import { cartSubtotal } from '@/src/domain/entities';
  *
  * A shopper browses as a guest, fills a basket, then signs in. If the basket
  * evaporates at that moment the sale is lost — it is the most common bug in
- * hand-rolled e-commerce auth. These tests pin the behaviour down before the
- * accounts feature is built on top of it.
+ * hand-rolled e-commerce auth.
+ *
+ * These drive `OwnershipTransfer` through a unit of work, which is how the
+ * only real caller reaches it: `RegisterUser` and `LogIn` do exactly this when
+ * a guest session id comes with the request. There is deliberately no use case
+ * wrapping it and no endpoint exposing it — "move everything this shopper owns
+ * onto that one" is not an operation a client should be able to ask for.
  */
 describe('ownership transfer (integration)', () => {
   let c: Container;
-  beforeEach(async () => { c = await newContainer(); });
+  let db: Client;
+  let deps: RepositoryDependencies;
+
+  beforeEach(async () => {
+    ({ container: c, db, deps } = await newHarness());
+  });
+
+  const transfer = (from: Owner, to: Owner) =>
+    new LibSqlUnitOfWork(db, deps).run(({ ownership }) => ownership.transferAll(from, to));
 
   it('moves a guest basket onto a user', async () => {
     const guest = await newGuest(c);
     const user = userOwner('user-1');
 
     await c.addToCart.execute(guest, 'p-001', 2);
-    await c.transferOwnership.execute(guest, user);
+    await transfer(guest, user);
 
     expect((await c.getCart.execute(user)).lines).toHaveLength(1);
     expect((await c.getCart.execute(guest)).lines).toHaveLength(0);
@@ -34,7 +50,7 @@ describe('ownership transfer (integration)', () => {
     await c.addToCart.execute(user, 'p-001', 1);
     await c.addToCart.execute(guest, 'p-001', 2);
 
-    await c.transferOwnership.execute(guest, user);
+    await transfer(guest, user);
 
     const cart = await c.getCart.execute(user);
     expect(cart.lines).toHaveLength(1);
@@ -50,7 +66,7 @@ describe('ownership transfer (integration)', () => {
     await c.addToCart.execute(guest, 'p-001', 1);
     const order = await c.placeOrder.execute(guest);
 
-    await c.transferOwnership.execute(guest, user);
+    await transfer(guest, user);
 
     expect(await c.listFavourites.execute(user)).toHaveLength(1);
     expect(await c.listOrders.execute(user)).toHaveLength(1);
@@ -62,7 +78,7 @@ describe('ownership transfer (integration)', () => {
     const guest = await newGuest(c);
     await c.addToCart.execute(guest, 'p-001', 2);
 
-    await c.transferOwnership.execute(guest, guest);
+    await transfer(guest, guest);
 
     expect((await c.getCart.execute(guest)).lines[0]!.quantity).toBe(2);
   });

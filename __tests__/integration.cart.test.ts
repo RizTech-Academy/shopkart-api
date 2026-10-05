@@ -12,9 +12,9 @@ describe('cart and checkout (integration)', () => {
     owner = await newGuest(c);
   });
 
-  it('rejects operations without a valid session', async () => {
-    await expect(c.resolveOwner.execute(null)).rejects.toThrow(/session id is required/i);
-    await expect(c.resolveOwner.execute('made-up')).rejects.toThrow(/No session exists/);
+  it('rejects operations without a valid credential', async () => {
+    await expect(c.resolveOwner.execute({ sessionId: null, bearerToken: null })).rejects.toThrow(/required/i);
+    await expect(c.resolveOwner.execute({ sessionId: 'made-up', bearerToken: null })).rejects.toThrow(/No session exists/);
   });
 
   it('adds an item and computes the subtotal from live prices', async () => {

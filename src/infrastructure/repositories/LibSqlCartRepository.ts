@@ -1,4 +1,4 @@
-import type { Client } from '@libsql/client';
+import type { SqlExecutor } from '@/src/infrastructure/db/executor';
 import type { Cart } from '@/src/domain/entities';
 import { ownerKey, type Owner } from '@/src/domain/owner';
 import type { CartRepository, Clock } from '@/src/domain/ports';
@@ -6,7 +6,7 @@ import { toProduct } from '@/src/infrastructure/db/mappers';
 
 export class LibSqlCartRepository implements CartRepository {
   constructor(
-    private readonly db: Client,
+    private readonly db: SqlExecutor,
     private readonly clock: Clock,
   ) {}
 
