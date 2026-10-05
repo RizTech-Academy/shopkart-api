@@ -360,6 +360,12 @@ prevented double checkout was wrong and got corrected.
 
 None required. `DATABASE_URL` is honoured if set — `:memory:` for an ephemeral database, or a libSQL URL for a hosted one — but the default local file needs no configuration at all.
 
+`SHOPKART_PUBLIC_URL` is the origin put in front of product image paths, so a phone can load them (`http://10.0.2.2:3200` for the Android emulator against a local server).
+
+## Hosted demo
+
+A demo runs at **https://shopkart-api.vercel.app** ([API docs](https://shopkart-api.vercel.app/docs)), and the Android app points there by default. It runs on Vercel's free plan with `DATABASE_URL=file:/tmp/shopkart.db`: each serverless instance builds and seeds its own SQLite file on first request. The catalogue is therefore always the same, but baskets, accounts and orders live only as long as that instance does, and two requests can land on different instances. It's a demo of the API, not a store; for anything that must persist, point `DATABASE_URL` at a hosted libSQL database.
+
 ## Product photos
 
 Each product's photo ships with the API in `public/products/<id>.webp` (800×800), so the
